@@ -1,39 +1,145 @@
-name: Fetch strategic intelligence
+import csv
+import hashlib
+from datetime import datetime, timezone
+import feedparser
+import pandas as pd
 
-on:
-  schedule:
-    # 09:00 UAE (UTC+4) = 05:00 UTC
-    - cron: "0 5 * * *"
-  workflow_dispatch: {}
+OUT = "data/intelligence_live.csv"
 
-permissions:
-  contents: write
+HEADERS = [
+    "date_utc",
+    "category",
+    "entity",
+    "region",
+    "headline",
+    "source",
+    "source_url",
+    "signal_type",
+    "expected_impact",
+    "confidence",
+    "action_required",
+    "id",
+]
 
-jobs:
-  fetch:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+# -------------------------
+# APPROVED SOURCES (GOVERNED)
+# -------------------------
+SOURCES = [
+    # INDUSTRY
+    {
+        "category": "Industry",
+        "entity": "Energy sector",
+        "region": "Global",
+        "source": "IEA",
+        "url": "https://www.iea.org/feeds/news.xml",
+    },
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+    # SIEMENS ENERGY
+    {
+        "category": "Company",
+        "entity": "Siemens Energy",
+        "region": "Global",
+        "source": "Siemens Energy IR",
+        "url": "https://www.siemens-energy.com/global/en/home/press-releases.feed.xml",
+    },
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pandas requests feedparser
+    # GE VERNOVA
+    {
+        "category": "Competition",
+        "entity": "GE Vernova",
+        "region": "Global",
+        "source": "GE Vernova",
+        "url": "https://www.gevernova.com/news/rss.xml",
+    },
 
-      - name: Run collector
-        run: |
-          python scripts/fetch_intel.py
+    # SCHNEIDER
+    {
+        "category": "Competition",
+        "entity": "Schneider Electric",
+        "region": "Global",
+        "source": "Schneider Electric",
+        "url": "https://www.se.com/ww/en/rss/news.xml",
+    },
 
-      - name: Commit updates
-        run: |
-          git config user.name "intel-bot"
-          git config user.email "intel-bot@users.noreply.github.com"
-          git add data/intelligence_live.csv
-          git diff --cached --quiet || git commit -m "Daily intel update"
-          git push
+    # REGULATION
+    {
+        "category": "Regulation",
+        "entity": "EU Energy Policy",
+        "region": "Europe",
+        "source": "EU Commission",
+        "url": "https://energy.ec.europa.eu/rss_en",
+    },
+]
+
+# -------------------------
+# SIMPLE CLASSIFICATION RULES
+# -------------------------
+def classify_signal(text):
+    t = text.lower()
+    if any(k in t for k in ["regulation", "policy", "directive", "law"]):
+        return "Regulatory"
+    if any(k in t for k in ["order", "contract", "award", "wins"]):
+        return "Order / Backlog"
+    if any(k in t for k in ["grid", "hvdc", "transmission", "substation"]):
+        return "Grid / Infrastructure"
+    if any(k in t for k in ["profit", "margin", "cash flow", "earnings"]):
+        return "Financial performance"
+    return "General"
+
+def classify_impact(text):
+    t = text.lower()
+    if any(k in t for k in ["delay", "risk", "decline", "penalty"]):
+        return "Negative"
+    if any(k in t for k in ["growth", "increase", "award", "record"]):
+        return "Positive"
+    return "Neutral"
+
+# -------------------------
+# MAIN
+# -------------------------
+def main():
+    rows = []
+
+    for src in SOURCES:
+        feed = feedparser.parse(src["url"])
+
+        for entry in feed.entries[:25]:
+            headline = entry.get("title", "").strip()
+            link = entry.get("link", "").strip()
+
+            if not headline:
+                continue
+
+            uid = hashlib.sha256((src["source"] + headline).encode()).hexdigest()[:16]
+
+            rows.append({
+                "date_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                "category": src["category"],
+                "entity": src["entity"],
+                "region": src["region"],
+                "headline": headline,
+                "source": src["source"],
+                "source_url": link,
+                "signal_type": classify_signal(headline),
+                "expected_impact": classify_impact(headline),
+                "confidence": "High",   # IR / regulator / IEA only
+                "action_required": "Yes" if classify_impact(headline) == "Negative" else "",
+                "id": uid,
+            })
+
+    df_new = pd.DataFrame(rows, columns=HEADERS)
+
+    try:
+        df_old = pd.read_csv(OUT)
+        df = pd.concat([df_old, df_new], ignore_index=True)
+        df = df.drop_duplicates(subset=["id"])
+    except Exception:
+        df = df_new
+
+    df = df.sort_values("date_utc", ascending=False)
+    df.to_csv(OUT, index=False, quoting=csv.QUOTE_MINIMAL)
+
+    print(f"Fetched {len(df_new)} intelligence items")
+
+if __name__ == "__main__":
+    main()
