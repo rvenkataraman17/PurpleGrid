@@ -1,0 +1,3 @@
+company,period,as_of,guidance_type,metric,low,mid,high,unit,source_system,source_ref,confidence,commentary
+Siemens Energy,2025_FY,2025-01-31,Guidance,Revenue,38000,39000,40000,EURm,IR,GuidanceDeck2025:p5,High,FY revenue guidance
+Siemens Energy,2025_FY,2025-01-31,Guidance,EBIT Margin,5.5,6.0,6.5,%,IR,GuidanceDeck2025:p5,High,EBIT margin guidance
