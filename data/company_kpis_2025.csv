@@ -1,6 +1,14 @@
-period,metric,value,unit,commentary
-2025_YTD,Orders,82000,EURm,Strong grid and energy transition demand
-2025_YTD,Revenue,78000,EURm,Growth driven by Grid Technologies
-2025_YTD,Book-to-Bill,1.05,x,Order intake exceeding revenue
-2025_YTD,EBITDA,6200,EURm,Margin improvement from restructuring
-2025_YTD,Free Cash Flow,3200,EURm,Improved working capital discipline
+company,period,period_end,basis,metric,value,unit,source_ref,confidence,commentary
+Siemens Energy,2024_FY,2024-09-30,Actual,Order intake,0,EURm,https://www.siemens-energy.com/global/en/home/investor-relations.html,Low,Replace 0 with IR-verified FY2024 order intake (EURm)
+Siemens Energy,2024_FY,2024-09-30,Actual,Revenue,0,EURm,https://www.siemens-energy.com/global/en/home/investor-relations.html,Low,Replace 0 with IR-verified FY2024 revenue (EURm)
+Siemens Energy,2024_FY,2024-09-30,Actual,Book-to-bill,0,ratio,https://www.siemens-energy.com/global/en/home/investor-relations.html,Low,Replace 0 with IR-verified FY2024 book-to-bill
+Siemens Energy,2024_FY,2024-09-30,Actual,Profit margin before Special items,0,%,https://www.siemens-energy.com/global/en/home/investor-relations.html,Low,Replace 0 with IR-verified FY2024 profit margin before special items (%)
+Siemens Energy,2024_FY,2024-09-30,Actual,Free cash flow pre tax,0,EURm,https://www.siemens-energy.com/global/en/home/investor-relations.html,Low,Replace 0 with IR-verified FY2024 free cash flow pre tax (EURm)
+Siemens Energy,2024_FY,2024-09-30,Actual,Net income,0,EURm,https://www.siemens-energy.com/global/en/home/investor-relations.html,Low,Replace 0 with IR-verified FY2024 net income (EURm)
+
+Siemens Energy,2025_FY,2025-09-30,Actual,Order intake,0,EURm,https://www.siemens-energy.com/global/en/home/investor-relations.html,Low,Replace 0 with IR-verified FY2025 order intake (EURm)
+Siemens Energy,2025_FY,2025-09-30,Actual,Revenue,0,EURm,https://www.siemens-energy.com/global/en/home/investor-relations.html,Low,Replace 0 with IR-verified FY2025 revenue (EURm)
+Siemens Energy,2025_FY,2025-09-30,Actual,Book-to-bill,0,ratio,https://www.siemens-energy.com/global/en/home/investor-relations.html,Low,Replace 0 with IR-verified FY2025 book-to-bill
+Siemens Energy,2025_FY,2025-09-30,Actual,Profit margin before Special items,0,%,https://www.siemens-energy.com/global/en/home/investor-relations.html,Low,Replace 0 with IR-verified FY2025 profit margin before special items (%)
+Siemens Energy,2025_FY,2025-09-30,Actual,Free cash flow pre tax,0,EURm,https://www.siemens-energy.com/global/en/home/investor-relations.html,Low,Replace 0 with IR-verified FY2025 free cash flow pre tax (EURm)
+Siemens Energy,2025_FY,2025-09-30,Actual,Net income,0,EURm,https://www.siemens-energy.com/global/en/home/investor-relations.html,Low,Replace 0 with IR-verified FY2025 net income (EURm)
