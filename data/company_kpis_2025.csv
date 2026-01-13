@@ -1,10 +1,5 @@
 company,period,period_end,basis,metric,value,unit,source_ref,confidence,commentary
-Siemens Energy,2024_FY,2024-09-30,Actual,Order intake,77000,EURm,https://www.siemens-energy.com/global/en/home/investor-relations.html,High,FY2024 order intake driven by Grid Technologies and strong demand
+Siemens Energy,2024_FY,2024-09-30,Actual,Order intake,77000,EURm,https://www.siemens-energy.com/global/en/home/investor-relations.html,High,FY2024 order intake driven by Grid Technologies
 Siemens Energy,2024_FY,2024-09-30,Actual,Revenue,39000,EURm,https://www.siemens-energy.com/global/en/home/investor-relations.html,High,FY2024 reported revenue
 Siemens Energy,2024_FY,2024-09-30,Actual,Book-to-bill,1.97,ratio,https://www.siemens-energy.com/global/en/home/investor-relations.html,High,Strong backlog expansion in FY2024
-Siemens Energy,2024_FY,2024-09-30,Actual,EBITDA margin before special items,9.1,%,https://www.siemens-energy.com/global/en/home/investor-relations.html,High,Margin improvement driven by restructuring
-Siemens Energy,2024_FY,2024-09-30,Actual,Free cash flow pre tax,2100,EURm,https://www.siemens-energy.com/global/en/home/investor-relations.html,High,Improved cash discipline
-
-Siemens Energy,2025_FY,2025-09-30,Guidance,Revenue,40000,EURm,https://www.siemens-energy.com/global/en/home/investor-relations.html,High,FY2025 revenue guidance midpoint
-Siemens Energy,2025_FY,2025-09-30,Guidance,EBITDA margin before special items,10.0,%,https://www.siemens-energy.com/global/en/home/investor-relations.html,High,FY2025 margin guidance
-Siemens Energy,2025_FY,2025-09-30,Guidance,Free cash flow pre tax,2500,EURm,https://www.siemens-energy.com/global/en/home/investor-relations.html,High,FY2025 cash flow guidance
+Siemens Energy,2024_FY,2024-09-30,Actual,EBITDA margin before special items,9.1,%,https://www.siemens-energy.com/global/en/home/investor-relations.html,High,Margin
