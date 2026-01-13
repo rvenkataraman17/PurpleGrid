@@ -1,5 +1,6 @@
-category,entity,source_name,source_url
-Competition,GE Vernova,GE IR,https://www.gevernova.com/investors
-Competition,Schneider Electric,Schneider IR,https://www.se.com/investor-relations
-Regulation,EU,EU Commission,https://energy.ec.europa.eu
-Industry,HVDC,Reuters Energy,https://www.reuters.com/energy
+category,entity,source_name,type,url,region,priority
+Industry,Grid,IEA News,rss,https://www.iea.org/feeds/news.xml,Global,High
+Competition,GE Vernova,GE Vernova IR,rss,https://www.gevernova.com/rss.xml,Global,High
+Competition,Schneider Electric,Schneider IR,rss,https://www.se.com/ww/en/about-us/investor-relations/rss/,Global,High
+Regulation,EU,EU Energy,rss,https://energy.ec.europa.eu/rss_en,Europe,High
+Customers,TenneT,TenneT News,rss,https://www.tennet.eu/news/rss.xml,Europe,Medium
