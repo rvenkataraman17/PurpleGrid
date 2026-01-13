@@ -166,10 +166,16 @@ def main():
     df = df.drop_duplicates(subset=["id"]).sort_values(["date_utc", "category", "entity"], ascending=[False, True, True])
 
     # Keep last 120 days to prevent file bloat
-    df["date_utc"] = pd.to_datetime(df["date_utc"], errors="coerce")
-    cutoff = pd.Timestamp.now(tz=timezone.utc) - pd.Timedelta(days=120)
-    df = df[df["date_utc"] >= cutoff]
-    df["date_utc"] = df["date_utc"].dt.strftime("%Y-%m-%d")
+df["date_utc"] = pd.to_datetime(df["date_utc"], errors="coerce")
+
+# Make cutoff timezone-naive to match df["date_utc"]
+cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=120)
+
+df = df[df["date_utc"].notna()]
+df = df[df["date_utc"] >= cutoff]
+
+df["date_utc"] = df["date_utc"].dt.strftime("%Y-%m-%d")
+
 
     df.to_csv(OUTPUT_PATH, index=False, quoting=csv.QUOTE_MINIMAL)
     print(f"Wrote {len(df)} rows to {OUTPUT_PATH}")
