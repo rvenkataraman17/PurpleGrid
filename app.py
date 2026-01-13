@@ -179,8 +179,14 @@ if not intelligence.empty:
 st.sidebar.header("Controls")
 
 company = "Siemens Energy"
-periods = sorted(kpis[kpis["company"] == company]["period"].dropna().unique().tolist())
-selected_period = st.sidebar.selectbox("Reporting period (FY)", periods, index=len(periods) - 1)
+periods = sorted(kpis[(kpis["company"] == company)]["period"].dropna().unique().tolist())
+
+if not periods:
+    st.error("No reporting periods found for 'Siemens Energy' in data/company_kpis_2025.csv. Add rows with company='Siemens Energy' and a period like '2025_FY'.")
+    st.stop()
+
+selected_period = st.sidebar.selectbox("Reporting period (FY)", periods, index=len(periods)-1)
+
 
 show_medium = st.sidebar.checkbox("Include Medium confidence", value=True)
 allowed_conf = {"High"} | ({"Medium"} if show_medium else set())
