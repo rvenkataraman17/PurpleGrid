@@ -29,7 +29,6 @@ ALLOWED_DOMAINS = {
     "Schneider Electric": ["se.com"],
 }
 
-# keep Siemens strict; peers slightly looser but still IR
 REQUIRED_PATH_TOKENS = {
     "Siemens Energy": ["investor", "investor-relations", "press-releases", "earnings-release"],
     "GE Vernova": ["invest", "investor", "news", "press"],
@@ -100,6 +99,7 @@ def apply_metric_mapping(df: pd.DataFrame, mapping: pd.DataFrame) -> pd.DataFram
 
 def governance_validate_kpis(df: pd.DataFrame, name: str):
     require_cols(df, ["company","period","period_end","basis","metric","value","unit","source_ref","confidence","commentary"], name)
+
     bad_units = sorted(set(df["unit"].dropna()) - ALLOWED_UNITS)
     if bad_units:
         st.error(f"❌ Unit governance failed in {name}. Unexpected units: {bad_units}")
@@ -110,7 +110,6 @@ def governance_validate_kpis(df: pd.DataFrame, name: str):
         st.error(f"❌ {name}: period_end has invalid dates. Use YYYY-MM-DD.")
         st.stop()
 
-    # source governance by company
     bad = df[~df.apply(lambda r: url_allowed(r["company"], r["source_ref"]), axis=1)]
     if len(bad) > 0:
         st.error(f"❌ Source governance failed in {name}: some rows not from approved IR sources.")
@@ -155,7 +154,6 @@ if not peers.empty:
 if not market.empty:
     market = governance_validate_market(market, "market_data.csv")
 
-# normalize intelligence
 if not intelligence.empty:
     if "date_utc" in intelligence.columns:
         intelligence["date_dt"] = safe_dt(intelligence["date_utc"])
@@ -165,26 +163,22 @@ if not intelligence.empty:
         intelligence["date_dt"] = pd.NaT
 
 # ---------------------------
-# Sidebar
+# Sidebar controls
 # ---------------------------
 st.sidebar.header("Controls")
 
 company = "Siemens Energy"
-periods = sorted(kpis[(kpis["company"] == company)]["period"].dropna().unique().tolist())
-selected_period = st.sidebar.selectbox("Reporting period (FY)", periods, index=len(periods)-1)
+periods = sorted(kpis[kpis["company"] == company]["period"].dropna().unique().tolist())
+selected_period = st.sidebar.selectbox("Reporting period (FY)", periods, index=len(periods) - 1)
 
 show_medium = st.sidebar.checkbox("Include Medium confidence", value=True)
 allowed_conf = {"High"} | ({"Medium"} if show_medium else set())
-
 intel_days = st.sidebar.slider("Intel lookback (days)", 7, 120, 30, 1)
 
 with st.sidebar.expander("Approved sources", expanded=False):
-    for k,v in IR_ROOTS.items():
+    for k, v in IR_ROOTS.items():
         st.write(f"{k}: {v}")
 
-# ---------------------------
-# Tabs
-# ---------------------------
 tab_perf, tab_peers, tab_intel, tab_strategy = st.tabs(
     ["📊 Performance", "🏁 Peers & Market", "🧠 Strategic Intelligence", "🧭 Strategy"]
 )
@@ -193,11 +187,7 @@ tab_perf, tab_peers, tab_intel, tab_strategy = st.tabs(
 # PERFORMANCE
 # ===========================
 with tab_perf:
-    st.subheader("Executive Snapshot")
-
-    sv_all = kpis[(kpis["company"] == company) & (kpis["period"] == selected_period)].copy()
-    sv_all = sv_all.sort_values("metric")
-
+    sv_all = kpis[(kpis["company"] == company) & (kpis["period"] == selected_period)].copy().sort_values("metric")
     blocked = sv_all[sv_all["confidence"].isin(BLOCK_CONFIDENCE)]
     sv = sv_all[sv_all["confidence"].isin(allowed_conf)]
 
@@ -206,17 +196,16 @@ with tab_perf:
     prev_last = prev.sort_values("period_end").groupby("metric").tail(1)
     prev_map = dict(zip(prev_last["metric"], prev_last["value"]))
 
+    st.subheader("Executive Snapshot")
     st.caption(f"Company: **{company}** | Period: **{selected_period}** | Period end: **{snapshot_end.date()}**")
 
     if len(blocked) > 0:
-        st.error("Blocked (Low confidence) KPIs are excluded from tiles/charts. Fix extraction/source before using.")
+        st.error("Blocked (Low confidence) KPIs are excluded. Fix extraction/source before using.")
         st.dataframe(blocked[["metric","value","unit","confidence","source_ref"]], use_container_width=True)
 
     cols = st.columns(3)
     for i, row in enumerate(sv.to_dict(orient="records")):
-        metric = row["metric"]
-        value = row["value"]
-        unit = row["unit"]
+        metric, value, unit = row["metric"], row["value"], row["unit"]
         delta = None
         if metric in prev_map:
             try:
@@ -224,12 +213,12 @@ with tab_perf:
             except Exception:
                 delta = None
         with cols[i % 3]:
-            st.metric(metric, fmt_value(value, unit), fmt_delta(delta, unit), help=row.get("commentary",""))
+            st.metric(metric, fmt_value(value, unit), fmt_delta(delta, unit), help=row.get("commentary", ""))
 
     st.divider()
-    st.subheader("Trends (FY series)")
-    metric_selected = st.selectbox("Select KPI", sorted(kpis[kpis["company"]==company]["metric"].unique().tolist()))
-    ts = kpis[(kpis["company"]==company) & (kpis["metric"]==metric_selected) & (kpis["confidence"].isin(allowed_conf))].sort_values("period_end")
+    st.subheader("Trend")
+    metric_selected = st.selectbox("Select KPI", sorted(kpis[kpis["company"] == company]["metric"].unique().tolist()))
+    ts = kpis[(kpis["company"] == company) & (kpis["metric"] == metric_selected) & (kpis["confidence"].isin(allowed_conf))].sort_values("period_end")
     if len(ts) > 0:
         st.line_chart(ts.set_index("period_end")["value"])
     st.dataframe(ts[["period","period_end","basis","value","unit","confidence","source_ref","commentary"]], use_container_width=True)
@@ -238,43 +227,53 @@ with tab_perf:
 # PEERS & MARKET
 # ===========================
 with tab_peers:
-    st.subheader("Peers (GE Vernova, Schneider) + Market snapshot")
+    st.subheader("Peers & Market")
 
     peer_universe = ["GE Vernova", "Schneider Electric"]
 
-    # Market data panel
-    if not market.empty:
-        st.markdown("### Latest close price (for context)")
+    # Market section
+    st.markdown("### Market snapshot")
+    if market.empty:
+        st.info("market_data.csv not found yet. Add it + run scripts/fetch_market_data.py via your existing fetch_intel.yml.")
+    else:
+        market["date"] = pd.to_datetime(market["date"], errors="coerce")
         latest = market.sort_values("date").groupby("company").tail(1)
         latest = latest[latest["confidence"].isin(allowed_conf)]
         st.dataframe(latest[["company","date","close","currency","confidence","source_ref"]], use_container_width=True)
-    else:
-        st.info("No market_data.csv yet. It will be generated by the daily job.")
+
+        st.markdown("### Share price trend")
+        company_sel = st.selectbox("Company for share price trend", sorted(market["company"].dropna().unique().tolist()))
+        m = market[market["company"] == company_sel].sort_values("date")
+        if len(m) > 1:
+            st.line_chart(m.set_index("date")[["close"]])
+        else:
+            st.info("Not enough history yet. After a few days, you'll see a trend.")
 
     st.divider()
 
-    st.markdown("### Peer KPI comparison (same FY, same metric/unit)")
+    # Peer KPI comparison
+    st.markdown("### Peer KPI comparison (same FY, same unit)")
     if peers.empty:
-        st.info("No peer_kpis_2025.csv yet. It will be generated by the daily job.")
+        st.info("peer_kpis_2025.csv is empty/missing. Populate via your daily job.")
     else:
-        se = kpis[(kpis["company"]==company) & (kpis["period"]==selected_period) & (kpis["confidence"].isin(allowed_conf))].copy()
-        p = peers[(peers["company"].isin(peer_universe)) & (peers["period"]==selected_period) & (peers["confidence"].isin(allowed_conf))].copy()
+        se = kpis[(kpis["company"] == company) & (kpis["period"] == selected_period) & (kpis["confidence"].isin(allowed_conf))].copy()
+        p = peers[(peers["company"].isin(peer_universe)) & (peers["period"] == selected_period) & (peers["confidence"].isin(allowed_conf))].copy()
 
-        common_metrics = sorted(set(se["metric"]).intersection(set(p["metric"]))) if len(p)>0 else sorted(se["metric"].unique())
-        peer_metric = st.selectbox("KPI", common_metrics)
+        common_metrics = sorted(set(se["metric"]).intersection(set(p["metric"]))) if len(p) else sorted(se["metric"].unique())
+        peer_metric = st.selectbox("KPI to compare", common_metrics)
 
-        se_row = se[se["metric"]==peer_metric]
-        if len(se_row)==0:
-            st.warning("Siemens value missing for selected KPI (or blocked by confidence).")
+        se_row = se[se["metric"] == peer_metric]
+        if len(se_row) == 0:
+            st.warning("Siemens value missing for selected KPI (or blocked).")
         else:
             unit = se_row["unit"].iloc[0]
-            rows = [{"company":"Siemens Energy", "value": float(se_row["value"].iloc[0]), "unit": unit}]
-            p2 = p[(p["metric"]==peer_metric) & (p["unit"]==unit)]
+            rows = [{"company": "Siemens Energy", "value": float(se_row["value"].iloc[0]), "unit": unit}]
+            p2 = p[(p["metric"] == peer_metric) & (p["unit"] == unit)]
             for _, r in p2.iterrows():
                 rows.append({"company": r["company"], "value": float(r["value"]), "unit": r["unit"]})
 
             comp = pd.DataFrame(rows).dropna()
-            if len(comp)>0:
+            if len(comp) > 0:
                 st.bar_chart(comp.set_index("company")["value"])
                 comp_show = comp.copy()
                 comp_show["value"] = comp_show["value"].map(lambda v: fmt_value(v, unit))
@@ -295,8 +294,7 @@ with tab_intel:
             cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=intel_days)
             intel = intel[intel["date_dt"] >= cutoff]
 
-        # Filters
-        c1,c2,c3,c4 = st.columns([1,1,1,2])
+        c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
         cats = sorted(intel["category"].dropna().unique().tolist()) if "category" in intel.columns else []
         ents = sorted(intel["entity"].dropna().unique().tolist()) if "entity" in intel.columns else []
         regs = sorted(intel["region"].dropna().unique().tolist()) if "region" in intel.columns else []
@@ -307,7 +305,7 @@ with tab_intel:
         with c3:
             reg_sel = st.multiselect("Region", regs, default=regs)
         with c4:
-            q = st.text_input("Search", placeholder="HVDC, data center, grid, tender, regulation...")
+            q = st.text_input("Search", placeholder="HVDC, grid, tender, regulation...")
 
         if cats:
             intel = intel[intel["category"].isin(cat_sel)]
@@ -324,7 +322,7 @@ with tab_intel:
                 mask = mask | intel[c].astype(str).str.lower().str.contains(s, na=False)
             intel = intel[mask]
 
-        left,right = st.columns([1,1])
+        left, right = st.columns([1, 1])
         with left:
             if "category" in intel.columns:
                 st.caption("Volume by category")
@@ -337,7 +335,7 @@ with tab_intel:
         st.divider()
         st.markdown("### 🚨 Critical signals")
         if "expected_impact" in intel.columns:
-            crit = intel[(intel["expected_impact"]=="Negative") | (intel.get("action_required","").astype(str).str.strip()!="")]
+            crit = intel[(intel["expected_impact"] == "Negative") | (intel.get("action_required","").astype(str).str.strip() != "")]
         else:
             crit = intel.copy()
 
@@ -371,7 +369,7 @@ with tab_strategy:
 
         sview = strategy.copy()
         if tsel != "All" and "theme" in sview.columns:
-            sview = sview[sview["theme"]==tsel]
+            sview = sview[sview["theme"] == tsel]
         if search.strip():
             s = search.strip().lower()
             cols = [c for c in ["statement","implication"] if c in sview.columns]
