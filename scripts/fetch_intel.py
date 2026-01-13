@@ -1,48 +1,41 @@
 import csv
 import hashlib
 import os
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from datetime import datetime, timedelta
 
-import pandas as pd
-import requests
 import feedparser
-
+import pandas as pd
 
 OUTPUT_PATH = "data/intelligence_live.csv"
 SOURCES_PATH = "data/intel_sources.csv"
 
-# Governance: only allow these categories
+# Only allow these categories (governance)
 ALLOWED_CATEGORIES = {"Industry", "Competition", "Customers", "Regulation"}
-
-# Simple keyword-based signal typing (you can refine later)
-SIGNAL_RULES = [
-    ("Regulation", ["regulation", "directive", "policy", "sanction", "tariff", "consultation"], "Policy/Regulatory"),
-    ("Competition", ["wins", "award", "contract", "order", "backlog", "tender"], "Competitive move"),
-    ("Customers", ["tso", "utility", "grid operator", "tender", "framework"], "Customer signal"),
-    ("Industry", ["hvdc", "grid", "transformer", "switchgear", "interconnector"], "Market/Industry"),
-]
-
-IMPACT_RULES = [
-    (["delay", "shortage", "sanction", "tariff", "investigation", "penalty"], "Negative"),
-    (["award", "wins", "record", "accelerate", "growth", "expands", "increases"], "Positive"),
-]
 
 HEADERS = [
     "date_utc",
     "category",
     "entity",
+    "region",
     "headline",
     "source_name",
     "source_url",
-    "region",
     "signal_type",
-    "impact_area",
     "expected_impact",
     "confidence",
     "action_required",
     "id",
 ]
+
+SIGNAL_KEYWORDS = {
+    "Policy/Regulatory": ["regulation", "directive", "policy", "sanction", "tariff", "consultation", "law", "rule"],
+    "Competitive move": ["wins", "award", "contract", "order", "backlog", "tender", "partnership", "acquisition"],
+    "Customer signal": ["tso", "utility", "grid operator", "framework", "tender", "procurement"],
+    "Market/Industry": ["hvdc", "grid", "transformer", "switchgear", "substation", "interconnector", "data center"],
+}
+
+NEGATIVE_WORDS = ["delay", "shortage", "sanction", "tariff", "investigation", "penalty", "lawsuit", "recall"]
+POSITIVE_WORDS = ["award", "wins", "record", "accelerate", "growth", "expands", "increase", "ramp", "upgrade"]
 
 
 def stable_id(*parts: str) -> str:
@@ -50,86 +43,69 @@ def stable_id(*parts: str) -> str:
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
-def classify_signal(category: str, text: str) -> str:
+def classify_signal(text: str) -> str:
     t = text.lower()
-    for cat, kws, label in SIGNAL_RULES:
-        if category == cat and any(k in t for k in kws):
+    for label, kws in SIGNAL_KEYWORDS.items():
+        if any(k in t for k in kws):
             return label
-    # fallback by category
-    return {
-        "Industry": "Market/Industry",
-        "Competition": "Competitive move",
-        "Customers": "Customer signal",
-        "Regulation": "Policy/Regulatory",
-    }.get(category, "Other")
+    return "General"
 
 
 def classify_impact(text: str) -> str:
     t = text.lower()
-    for kws, label in IMPACT_RULES:
-        if any(k in t for k in kws):
-            return label
+    if any(k in t for k in NEGATIVE_WORDS):
+        return "Negative"
+    if any(k in t for k in POSITIVE_WORDS):
+        return "Positive"
     return "Neutral"
 
 
-def default_impact_area(text: str) -> str:
-    t = text.lower()
-    if any(k in t for k in ["hvdc", "grid", "switchgear", "transformer", "substation"]):
-        return "Grid"
-    if any(k in t for k in ["wind", "turbine", "offshore"]):
-        return "Wind"
-    if any(k in t for k in ["service", "maintenance"]):
-        return "Service"
-    return "Enterprise"
+def parse_entry_date(entry) -> str:
+    # Always write date_utc as YYYY-MM-DD (string). No timezone dtype issues.
+    if getattr(entry, "published_parsed", None):
+        dt = datetime(*entry.published_parsed[:6])
+        return dt.strftime("%Y-%m-%d")
+    if getattr(entry, "updated_parsed", None):
+        dt = datetime(*entry.updated_parsed[:6])
+        return dt.strftime("%Y-%m-%d")
+    return datetime.utcnow().strftime("%Y-%m-%d")
 
 
-def fetch_rss(source: Dict) -> List[Dict]:
-    url = source["url"]
-    feed = feedparser.parse(url)
-    out = []
+def fetch_rss(source: dict) -> list[dict]:
+    feed = feedparser.parse(source["url"])
+    rows = []
 
-    for e in feed.entries[:50]:
-        title = getattr(e, "title", "").strip()
-        link = getattr(e, "link", "").strip()
-        published = getattr(e, "published", "") or getattr(e, "updated", "")
-        # Keep UTC date as now if parsing fails
-        dt_utc = datetime.now(timezone.utc)
+    for e in getattr(feed, "entries", [])[:50]:
+        title = (getattr(e, "title", "") or "").strip()
+        link = (getattr(e, "link", "") or "").strip()
+        if not title:
+            continue
 
-        # feedparser often includes parsed time
-        if getattr(e, "published_parsed", None):
-            dt_utc = datetime(*e.published_parsed[:6], tzinfo=timezone.utc)
+        date_utc = parse_entry_date(e)
+        signal_type = classify_signal(title)
+        impact = classify_impact(title)
 
-        headline = title if title else link
-        cat = source["category"]
-        entity = source["entity"]
+        confidence = "High" if str(source.get("priority", "")).strip().lower() == "high" else "Medium"
+        action_required = "Yes" if impact == "Negative" else ""
 
-        signal_type = classify_signal(cat, headline)
-        expected_impact = classify_impact(headline)
-        impact_area = default_impact_area(headline)
+        rid = stable_id(source.get("source_name", ""), title, link)
 
-        # Governance defaults
-        confidence = "Medium" if source.get("priority", "Medium") != "High" else "High"
-        action_required = "Yes" if expected_impact == "Negative" else ""
-
-        rid = stable_id(source["source_name"], headline, link)
-
-        out.append({
-            "date_utc": dt_utc.strftime("%Y-%m-%d"),
-            "category": cat,
-            "entity": entity,
-            "headline": headline,
-            "source_name": source["source_name"],
-            "source_url": link or url,
+        rows.append({
+            "date_utc": date_utc,
+            "category": source["category"],
+            "entity": source.get("entity", ""),
             "region": source.get("region", "Global"),
+            "headline": title,
+            "source_name": source.get("source_name", ""),
+            "source_url": link if link else source["url"],
             "signal_type": signal_type,
-            "impact_area": impact_area,
-            "expected_impact": expected_impact,
+            "expected_impact": impact,
             "confidence": confidence,
             "action_required": action_required,
             "id": rid,
         })
 
-    return out
+    return rows
 
 
 def main():
@@ -138,44 +114,43 @@ def main():
 
     sources = pd.read_csv(SOURCES_PATH).to_dict(orient="records")
 
-    # Governance: category allowlist
+    # Governance: only allowed categories
     for s in sources:
         if s.get("category") not in ALLOWED_CATEGORIES:
-            raise ValueError(f"Source category not allowed: {s.get('category')} in {s}")
+            raise ValueError(f"Source category not allowed: {s.get('category')}")
 
-    all_rows: List[Dict] = []
-
+    all_rows = []
     for s in sources:
-        stype = str(s.get("type", "")).lower().strip()
+        stype = str(s.get("type", "")).strip().lower()
         if stype == "rss":
             all_rows.extend(fetch_rss(s))
-        else:
-            # Keep it strict: start with RSS only.
-            # Add HTML scraping later for very stable, owned pages (regulators/company PR).
-            continue
 
     df_new = pd.DataFrame(all_rows, columns=HEADERS)
 
-    # Load existing and dedupe by id
+    # Load old
     if os.path.exists(OUTPUT_PATH):
         df_old = pd.read_csv(OUTPUT_PATH)
         df = pd.concat([df_old, df_new], ignore_index=True)
     else:
         df = df_new
 
-    # Keep last 120 days to prevent file bloat
+    # Dedupe
+    if "id" in df.columns:
+        df = df.drop_duplicates(subset=["id"])
+
+    # Keep last 120 days (string-based date filter to avoid tz/dtype issues)
     df["date_utc"] = pd.to_datetime(df["date_utc"], errors="coerce")
-
-    # Use timezone-naive UTC cutoff (prevents pandas comparison crash)
-    cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=120)
-
+    cutoff = datetime.utcnow() - timedelta(days=120)
     df = df[df["date_utc"].notna()]
     df = df[df["date_utc"] >= cutoff]
+    df = df.sort_values(["date_utc", "category", "entity"], ascending=[False, True, True])
 
+    # Write back as YYYY-MM-DD strings
     df["date_utc"] = df["date_utc"].dt.strftime("%Y-%m-%d")
-
     df.to_csv(OUTPUT_PATH, index=False, quoting=csv.QUOTE_MINIMAL)
-    print(f"Wrote {len(df)} rows to {OUTPUT_PATH}")
-    if __name__ == "__main__":
-    main()
 
+    print(f"Wrote {len(df)} rows to {OUTPUT_PATH}")
+
+
+if __name__ == "__main__":
+    main()
