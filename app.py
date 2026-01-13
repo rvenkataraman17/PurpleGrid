@@ -301,23 +301,26 @@ with tab_peers:
 # ===========================
 with tab_intel:
     st.subheader("Strategic Intelligence (signals)")
+
     if intelligence.empty:
         st.info("No intelligence feed found (intelligence_live.csv or intelligence_2025.csv).")
     else:
         st.caption(f"Feed: **{intel_path}**")
 
         intel = intelligence.copy()
+
+        # Apply lookback filter safely (timezone-safe)
         if "date_dt" in intel.columns and intel["date_dt"].notna().any():
             cutoff = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=intel_days)).tz_convert(None)
+            intel = intel[intel["date_dt"] >= cutoff]
 
-if "date_dt" in intel.columns and intel["date_dt"].notna().any():
-    intel = intel[intel["date_dt"] >= cutoff]
-
-
+        # Filters
         c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
+
         cats = sorted(intel["category"].dropna().unique().tolist()) if "category" in intel.columns else []
         ents = sorted(intel["entity"].dropna().unique().tolist()) if "entity" in intel.columns else []
         regs = sorted(intel["region"].dropna().unique().tolist()) if "region" in intel.columns else []
+
         with c1:
             cat_sel = st.multiselect("Category", cats, default=cats)
         with c2:
@@ -325,7 +328,7 @@ if "date_dt" in intel.columns and intel["date_dt"].notna().any():
         with c3:
             reg_sel = st.multiselect("Region", regs, default=regs)
         with c4:
-            q = st.text_input("Search", placeholder="HVDC, grid, tender, regulation...")
+            q = st.text_input("Search", placeholder="HVDC, data center, grid, tender, regulation...")
 
         if cats:
             intel = intel[intel["category"].isin(cat_sel)]
@@ -336,7 +339,7 @@ if "date_dt" in intel.columns and intel["date_dt"].notna().any():
 
         if q.strip():
             s = q.strip().lower()
-            cols = [c for c in ["headline","description","signal_type","impact_area","strategic_implication"] if c in intel.columns]
+            cols = [c for c in ["headline", "description", "signal_type", "impact_area", "strategic_implication"] if c in intel.columns]
             mask = False
             for c in cols:
                 mask = mask | intel[c].astype(str).str.lower().str.contains(s, na=False)
@@ -354,22 +357,34 @@ if "date_dt" in intel.columns and intel["date_dt"].notna().any():
 
         st.divider()
         st.markdown("### 🚨 Critical signals")
+
         if "expected_impact" in intel.columns:
-            crit = intel[(intel["expected_impact"] == "Negative") | (intel.get("action_required","").astype(str).str.strip() != "")]
+            crit = intel[(intel["expected_impact"] == "Negative") | (intel.get("action_required", "").astype(str).str.strip() != "")]
         else:
             crit = intel.copy()
 
         if "date_dt" in crit.columns:
             crit = crit.sort_values("date_dt", ascending=False)
 
-        cols_show = [c for c in ["date_utc","category","entity","headline","region","signal_type","impact_area","expected_impact","confidence","action_required","source_url"] if c in crit.columns]
+        cols_show = [c for c in [
+            "date_utc", "category", "entity", "headline", "region",
+            "signal_type", "impact_area", "expected_impact", "confidence",
+            "action_required", "source_url"
+        ] if c in crit.columns]
+
         st.dataframe(crit[cols_show].head(50), use_container_width=True)
 
         st.divider()
         st.markdown("### All signals (filtered)")
-        cols_all = [c for c in ["date_utc","category","entity","headline","region","signal_type","impact_area","expected_impact","confidence","source_url"] if c in intel.columns]
+
+        cols_all = [c for c in [
+            "date_utc", "category", "entity", "headline", "region",
+            "signal_type", "impact_area", "expected_impact", "confidence", "source_url"
+        ] if c in intel.columns]
+
         if "date_dt" in intel.columns:
             intel = intel.sort_values("date_dt", ascending=False)
+
         st.dataframe(intel[cols_all], use_container_width=True)
 
 # ===========================
