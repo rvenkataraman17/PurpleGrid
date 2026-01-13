@@ -1,0 +1,4 @@
+company,period,as_of,basis,metric,value,unit,source_system,source_ref,confidence,commentary,fx_rate,fx_date
+GE Vernova,2025_FY,2025-12-31,Actual,Revenue,00000,EURm,AnnualReport,GEV2025:p10,Medium,Converted from USD,0.92,2025-12-31
+Schneider Electric,2025_FY,2025-12-31,Actual,Revenue,00000,EURm,AnnualReport,SE2025:p8,High,FY revenue
+Hitachi Energy,2025_FY,2025-03-31,Estimate,Revenue,00000,EURm,CompanySite,HitachiEnergy:2025,Low,Private reporting varies,,
