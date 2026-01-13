@@ -4,9 +4,8 @@ from urllib.parse import urlparse
 import pandas as pd
 import streamlit as st
 
-
 # ---------------------------
-# Page config
+# Page setup
 # ---------------------------
 st.set_page_config(
     page_title="Siemens Energy – Strategy Dashboard",
@@ -16,28 +15,34 @@ st.set_page_config(
 
 st.title("Siemens Energy – Strategy Dashboard")
 
-
 # ---------------------------
 # Governance configuration
 # ---------------------------
 ALLOWED_UNITS = {"EURm", "%", "ratio"}
+BLOCK_CONFIDENCE = {"Low"}  # strict: never show Low in tiles/charts
 
-# Siemens Energy KPIs must be backed by Siemens Energy Investor Relations sources.
-# (Adjust allowed_path if your IR URLs use different path segments.)
-ALLOWED_DOMAIN = "siemens-energy.com"
-REQUIRED_PATH_TOKENS = ["investor-relations", "investor"]  # allow either token
+SIEMENS_IR_ROOT = "https://www.siemens-energy.com/global/en/home/investor-relations.html"
+GEV_IR_ROOT = "https://www.gevernova.com/investors"
+SCHNEIDER_IR_ROOT = "https://www.se.com/ww/en/about-us/investor-relations/"
 
-# Strict governance: block Low confidence from being shown in KPI tiles
-BLOCK_CONFIDENCE = {"Low"}
+# Strict domain allowlist per company
+ALLOWED_DOMAINS_BY_COMPANY = {
+    "Siemens Energy": ["siemens-energy.com"],
+    "GE Vernova": ["gevernova.com"],
+    "Schneider Electric": ["se.com"],
+}
 
-# Visual best practices we implement:
-# - KPI tiles + deltas
-# - RAG vs guidance band
-# - sparklines-like trends via line charts per metric
-# - "critical signals" intelligence section
-# (RAG and executive dashboard principles are widely used in performance reporting) :contentReference[oaicite:1]{index=1}
+# Optional: require path token for Siemens specifically (keeps it tight)
+REQUIRED_PATH_TOKENS_BY_COMPANY = {
+    "Siemens Energy": ["investor-relations", "investor"],
+    "GE Vernova": ["investor"],  # keep looser; site varies
+    "Schneider Electric": ["investor-relations", "investor"],
+}
 
 
+# ---------------------------
+# Helpers
+# ---------------------------
 def safe_dt(series):
     return pd.to_datetime(series, errors="coerce")
 
@@ -53,7 +58,6 @@ def fmt_value(value, unit):
         return f"{v:.1f}%"
     if u == "ratio":
         return f"{v:.2f}x"
-    # EURm
     return f"{v:,.0f} {unit}".strip()
 
 
@@ -73,18 +77,6 @@ def fmt_delta(delta, unit):
     return f"{d:+,.0f} {unit}".strip()
 
 
-def is_se_ir_url(url: str) -> bool:
-    if not isinstance(url, str) or not url.startswith("http"):
-        return False
-    try:
-        u = urlparse(url)
-        domain_ok = u.netloc.endswith(ALLOWED_DOMAIN)
-        path_ok = any(tok in (u.path or "").lower() for tok in REQUIRED_PATH_TOKENS)
-        return domain_ok and path_ok
-    except Exception:
-        return False
-
-
 def require_cols(df, cols, name):
     missing = [c for c in cols if c not in df.columns]
     if missing:
@@ -92,49 +84,111 @@ def require_cols(df, cols, name):
         st.stop()
 
 
-def governance_validate_kpis(kpis: pd.DataFrame):
-    # Required schema
+def url_allowed_for_company(url: str, company: str) -> bool:
+    if not isinstance(url, str) or not url.startswith("http"):
+        return False
+    try:
+        u = urlparse(url)
+        domains = ALLOWED_DOMAINS_BY_COMPANY.get(company, [])
+        domain_ok = any(u.netloc.endswith(d) for d in domains)
+
+        tokens = REQUIRED_PATH_TOKENS_BY_COMPANY.get(company, [])
+        path = (u.path or "").lower()
+        path_ok = True if not tokens else any(t in path for t in tokens)
+
+        return domain_ok and path_ok
+    except Exception:
+        return False
+
+
+def apply_metric_mapping(df: pd.DataFrame, mapping: pd.DataFrame, df_name: str) -> pd.DataFrame:
+    """
+    Optional: map raw/source metric names to canonical metric names.
+    mapping columns: source_metric, canonical_metric
+    """
+    if mapping is None or mapping.empty:
+        return df
+    require_cols(mapping, ["source_metric", "canonical_metric"], "metric_map.csv")
+    if "metric" not in df.columns:
+        st.error(f"{df_name} missing column 'metric' required for mapping.")
+        st.stop()
+
+    m = dict(zip(mapping["source_metric"].astype(str), mapping["canonical_metric"].astype(str)))
+    df["metric"] = df["metric"].astype(str).map(lambda x: m.get(x, x))
+    return df
+
+
+def governance_validate_kpis(df: pd.DataFrame, df_name: str):
     require_cols(
-        kpis,
+        df,
         ["company", "period", "period_end", "basis", "metric", "value", "unit", "source_ref", "confidence", "commentary"],
-        "company_kpis.csv"
+        df_name
     )
 
-    # Units
-    bad_units = sorted(set(kpis["unit"].dropna()) - ALLOWED_UNITS)
+    # unit governance
+    bad_units = sorted(set(df["unit"].dropna()) - ALLOWED_UNITS)
     if bad_units:
-        st.error(f"❌ Unit governance failed. Unexpected units: {bad_units}. Allowed: {sorted(ALLOWED_UNITS)}")
+        st.error(f"❌ Unit governance failed in {df_name}. Unexpected units: {bad_units}. Allowed: {sorted(ALLOWED_UNITS)}")
         st.stop()
 
-    # Period_end parse
-    kpis["period_end"] = safe_dt(kpis["period_end"])
-    if kpis["period_end"].isna().any():
-        st.error("❌ period_end contains invalid dates. Use YYYY-MM-DD (e.g., 2024-09-30).")
+    # period_end must parse
+    df["period_end"] = safe_dt(df["period_end"])
+    if df["period_end"].isna().any():
+        st.error(f"❌ {df_name}: period_end has invalid dates. Use YYYY-MM-DD (e.g., 2024-09-30).")
         st.stop()
 
-    # IR-only source gate
-    bad_src = kpis[~kpis["source_ref"].apply(is_se_ir_url)]
-    if len(bad_src) > 0:
-        st.error("❌ Source governance failed: KPI rows include non-Investor-Relations sources for Siemens Energy.")
-        st.dataframe(bad_src[["period", "metric", "source_ref", "confidence"]], use_container_width=True)
+    # source_ref per company allowlist
+    bad_rows = []
+    for comp in df["company"].dropna().unique():
+        sub = df[df["company"] == comp]
+        bad = sub[~sub["source_ref"].apply(lambda u: url_allowed_for_company(u, comp))]
+        if len(bad) > 0:
+            bad_rows.append(bad[["company", "period", "metric", "source_ref", "confidence"]])
+
+    if bad_rows:
+        st.error(f"❌ Source governance failed in {df_name}: some rows are not from approved Investor Relations domains/paths.")
+        st.dataframe(pd.concat(bad_rows, ignore_index=True), use_container_width=True)
         st.stop()
 
-    # Confidence must be present (High/Medium/Low)
-    # We don't block Medium, but we DO block Low for KPI tiles (below).
-    return kpis
+    return df
 
 
-def governance_validate_guidance(guidance: pd.DataFrame):
-    require_cols(guidance, ["company", "period", "metric", "unit", "low", "mid", "high", "source_ref", "confidence"], "guidance.csv")
-    bad_units = sorted(set(guidance["unit"].dropna()) - ALLOWED_UNITS)
+def governance_validate_guidance(df: pd.DataFrame, df_name: str):
+    require_cols(
+        df,
+        ["company", "period", "metric", "unit", "low", "mid", "high", "source_ref", "confidence"],
+        df_name
+    )
+    bad_units = sorted(set(df["unit"].dropna()) - ALLOWED_UNITS)
     if bad_units:
-        st.error(f"❌ Guidance unit governance failed: {bad_units}")
+        st.error(f"❌ Unit governance failed in {df_name}. Unexpected units: {bad_units}.")
         st.stop()
-    return guidance
+
+    # source_ref per company allowlist
+    bad_rows = []
+    for comp in df["company"].dropna().unique():
+        sub = df[df["company"] == comp]
+        bad = sub[~sub["source_ref"].apply(lambda u: url_allowed_for_company(u, comp))]
+        if len(bad) > 0:
+            bad_rows.append(bad[["company", "period", "metric", "source_ref", "confidence"]])
+
+    if bad_rows:
+        st.error(f"❌ Source governance failed in {df_name}: some rows are not from approved IR domains/paths.")
+        st.dataframe(pd.concat(bad_rows, ignore_index=True), use_container_width=True)
+        st.stop()
+
+    return df
 
 
-def pick_latest_intel_file():
-    return "data/intelligence_live.csv" if os.path.exists("data/intelligence_live.csv") else "data/intelligence_2025.csv"
+def load_intelligence():
+    # prefer live feed if you set up daily job, else fallback
+    p = "data/intelligence_live.csv"
+    if os.path.exists(p):
+        return pd.read_csv(p), p
+    p2 = "data/intelligence_2025.csv"
+    if os.path.exists(p2):
+        return pd.read_csv(p2), p2
+    return pd.DataFrame(), ""
 
 
 # ---------------------------
@@ -145,26 +199,31 @@ def load_data():
     kpis = pd.read_csv("data/company_kpis_2025.csv")
     guidance = pd.read_csv("data/guidance_2025.csv") if os.path.exists("data/guidance_2025.csv") else pd.DataFrame()
     peers = pd.read_csv("data/peer_kpis_2025.csv") if os.path.exists("data/peer_kpis_2025.csv") else pd.DataFrame()
-
-    intel_path = pick_latest_intel_file()
-    intelligence = pd.read_csv(intel_path) if os.path.exists(intel_path) else pd.DataFrame()
-
     strategy = pd.read_csv("data/strategy_2025.csv") if os.path.exists("data/strategy_2025.csv") else pd.DataFrame()
-    return kpis, guidance, peers, intelligence, intel_path, strategy
+
+    metric_map = pd.read_csv("data/metric_map.csv") if os.path.exists("data/metric_map.csv") else pd.DataFrame()
+    intelligence, intel_path = load_intelligence()
+
+    return kpis, guidance, peers, intelligence, intel_path, strategy, metric_map
 
 
-kpis, guidance, peers, intelligence, intel_path, strategy = load_data()
+kpis, guidance, peers, intelligence, intel_path, strategy, metric_map = load_data()
 
-
-# ---------------------------
-# Governance checks (hard)
-# ---------------------------
-kpis = governance_validate_kpis(kpis)
-
+# Apply mapping (optional)
+kpis = apply_metric_mapping(kpis, metric_map, "company_kpis_2025.csv")
+if not peers.empty:
+    peers = apply_metric_mapping(peers, metric_map, "peer_kpis_2025.csv")
 if not guidance.empty:
-    guidance = governance_validate_guidance(guidance)
+    guidance = apply_metric_mapping(guidance, metric_map, "guidance_2025.csv")
 
-# Normalize intelligence if present
+# Governance validation (hard stops)
+kpis = governance_validate_kpis(kpis, "company_kpis_2025.csv")
+if not peers.empty:
+    peers = governance_validate_kpis(peers, "peer_kpis_2025.csv")
+if not guidance.empty:
+    guidance = governance_validate_guidance(guidance, "guidance_2025.csv")
+
+# Normalize intelligence dates if present
 if not intelligence.empty:
     if "date_utc" in intelligence.columns:
         intelligence["date_dt"] = safe_dt(intelligence["date_utc"])
@@ -179,65 +238,66 @@ if not intelligence.empty:
 # ---------------------------
 st.sidebar.header("Controls")
 
-# Yearly basis: periods like 2024_FY, 2025_FY
-periods = sorted(kpis["period"].dropna().unique().tolist())
-selected_period = st.sidebar.selectbox("Reporting period (yearly)", periods, index=len(periods) - 1)
-
-# View filters
-lookback_days = st.sidebar.slider("Intel lookback (days)", 7, 120, 30, 1)
-
-# Show/hide medium confidence in tiles (Low is always blocked)
-show_medium = st.sidebar.checkbox("Include Medium confidence in KPI tiles", value=True)
-
-allowed_conf_for_tiles = {"High"} | ({"Medium"} if show_medium else set())
-
-# Company fixed to Siemens Energy for KPI file; if you expand later, keep it filterable.
 company = "Siemens Energy"
 
+# Yearly periods only
+periods = sorted(kpis[kpis["company"] == company]["period"].dropna().unique().tolist())
+if not periods:
+    st.error("No periods found for Siemens Energy in company_kpis_2025.csv.")
+    st.stop()
+
+selected_period = st.sidebar.selectbox("Reporting period (FY)", periods, index=len(periods) - 1)
+
+# Confidence toggle: allow Medium to show (Low always blocked)
+show_medium = st.sidebar.checkbox("Include Medium confidence", value=True)
+allowed_conf = {"High"} | ({"Medium"} if show_medium else set())
+
+# Intel lookback
+lookback_days = st.sidebar.slider("Intel lookback (days)", 7, 120, 30, 1)
+
+with st.sidebar.expander("Source roots (reference)", expanded=False):
+    st.write(f"Siemens Energy IR: {SIEMENS_IR_ROOT}")
+    st.write(f"GE Vernova IR: {GEV_IR_ROOT}")
+    st.write(f"Schneider IR: {SCHNEIDER_IR_ROOT}")
 
 # ---------------------------
-# Prepare views
+# Views: Siemens KPIs for selected period
 # ---------------------------
-kpis_view = kpis[(kpis["company"] == company) & (kpis["period"] == selected_period)].copy()
-kpis_view = kpis_view.sort_values("metric")
+kpis_view_all = kpis[(kpis["company"] == company) & (kpis["period"] == selected_period)].copy()
+kpis_view_all = kpis_view_all.sort_values("metric")
 
-# Block Low confidence from KPI tiles (strict)
-blocked = kpis_view[kpis_view["confidence"].isin(BLOCK_CONFIDENCE)].copy()
-kpis_tiles = kpis_view[kpis_view["confidence"].isin(allowed_conf_for_tiles)].copy()
+blocked = kpis_view_all[kpis_view_all["confidence"].isin(BLOCK_CONFIDENCE)].copy()
+kpis_tiles = kpis_view_all[kpis_view_all["confidence"].isin(allowed_conf)].copy()
 
-# Snapshot date
-snapshot_end = kpis_view["period_end"].max()
+snapshot_end = kpis_view_all["period_end"].max()
 
-# Previous period for deltas (yearly -> previous FY)
+# Previous FY values for delta (YoY)
 prev_candidates = kpis[(kpis["company"] == company) & (kpis["period_end"] < snapshot_end)].copy()
 prev_last = prev_candidates.sort_values("period_end").groupby("metric").tail(1)
 prev_map = dict(zip(prev_last["metric"], prev_last["value"]))
 
-
 # ---------------------------
 # Tabs
 # ---------------------------
-tab_perf, tab_guidance, tab_intel, tab_strategy = st.tabs(
-    ["📊 Performance", "🏁 Guidance", "🧠 Strategic Intelligence", "🧭 Strategy"]
+tab_perf, tab_peers, tab_intel, tab_strategy = st.tabs(
+    ["📊 Performance", "🏁 Peers & Guidance", "🧠 Strategic Intelligence", "🧭 Strategy"]
 )
 
 # ===========================
 # TAB: PERFORMANCE
 # ===========================
 with tab_perf:
-    st.subheader("Executive Snapshot (Decision-grade)")
+    st.subheader("Executive Snapshot (Decision-driven)")
 
-    # Basis banner
     st.caption(
-        f"Company: **{company}**  |  Reporting basis: **{selected_period}**  |  Period end: **{snapshot_end.date()}**"
+        f"Company: **{company}**  |  Period: **{selected_period}**  |  Period end: **{snapshot_end.date()}**  |  Display confidence: **{sorted(allowed_conf)}**"
     )
 
-    # If any KPIs are blocked, make it loud
     if len(blocked) > 0:
-        st.error("Blocked KPIs: **Low confidence** items are not shown in the KPI tiles. Fix source_ref / confidence to use them.")
+        st.error("Blocked KPIs: **Low confidence** items are excluded from tiles and charts. Fix them before using in decisions.")
         st.dataframe(blocked[["metric", "value", "unit", "confidence", "source_ref"]], use_container_width=True)
 
-    # KPI tiles (3 columns)
+    # KPI tiles
     cards = kpis_tiles.to_dict(orient="records")
     cols = st.columns(3)
 
@@ -245,6 +305,7 @@ with tab_perf:
         metric = row["metric"]
         unit = row["unit"]
         value = row["value"]
+
         delta = None
         if metric in prev_map:
             try:
@@ -262,125 +323,153 @@ with tab_perf:
 
     st.divider()
 
-    # Trend section (multi-year yearly = 2 points now; grows as you add more years)
-    st.subheader("Trends (FY time series)")
+    st.subheader("Trends (FY series)")
 
     metric_selected = st.selectbox(
-        "Select KPI for trend",
+        "Select KPI",
         sorted(kpis[kpis["company"] == company]["metric"].unique().tolist()),
     )
 
     ts = kpis[(kpis["company"] == company) & (kpis["metric"] == metric_selected)].copy()
-    ts = ts.sort_values("period_end")
+    ts = ts[ts["confidence"].isin(allowed_conf)].sort_values("period_end")
 
-    # Show small table + chart
-    st.line_chart(ts.set_index("period_end")["value"])
+    if len(ts) == 0:
+        st.warning("No High/Medium confidence time-series points for this metric.")
+    else:
+        st.line_chart(ts.set_index("period_end")["value"])
+
     st.dataframe(
         ts[["period", "period_end", "basis", "value", "unit", "confidence", "source_ref", "commentary"]],
         use_container_width=True
     )
 
-
 # ===========================
-# TAB: GUIDANCE (RAG)
+# TAB: PEERS & GUIDANCE
 # ===========================
-with tab_guidance:
-    st.subheader("Guidance vs Actual (RAG)")
+with tab_peers:
+    st.subheader("Peers (GE Vernova & Schneider Electric) + Guidance")
 
+    # --- Guidance (Siemens only) ---
+    st.markdown("### Siemens Energy: Guidance vs Actual (RAG)")
     if guidance.empty:
-        st.info("No guidance file found. Add data/guidance_2025.csv to enable this view.")
+        st.info("No guidance_2025.csv found. Add it to enable RAG guidance view.")
     else:
         g = guidance[(guidance["company"] == company) & (guidance["period"] == selected_period)].copy()
         if len(g) == 0:
-            st.warning("No guidance rows match the selected period.")
+            st.warning("No Siemens guidance rows match the selected period.")
         else:
-            # Join
-            a = kpis_view[["metric", "value", "unit", "confidence"]].copy()
+            a = kpis_view_all[["metric", "value", "unit", "confidence"]].copy()
+            a = a[a["confidence"].isin(allowed_conf)]
+
             merged = a.merge(g, on=["metric", "unit"], how="left", suffixes=("_act", "_g"))
-
-            # Block Low confidence actuals from guidance evaluation too
-            merged_eval = merged[~merged["confidence"].isin(BLOCK_CONFIDENCE)].copy()
-
-            # Compute status vs band
-            merged_eval["value_num"] = pd.to_numeric(merged_eval["value"], errors="coerce")
-            merged_eval["low_num"] = pd.to_numeric(merged_eval["low"], errors="coerce")
-            merged_eval["mid_num"] = pd.to_numeric(merged_eval["mid"], errors="coerce")
-            merged_eval["high_num"] = pd.to_numeric(merged_eval["high"], errors="coerce")
+            for c in ["value", "low", "mid", "high"]:
+                merged[c] = pd.to_numeric(merged[c], errors="coerce")
 
             def rag(row):
-                v, lo, hi = row["value_num"], row["low_num"], row["high_num"]
+                v, lo, hi = row["value"], row["low"], row["high"]
                 if pd.isna(v) or pd.isna(lo) or pd.isna(hi):
                     return "Grey"
                 if lo <= v <= hi:
                     return "Green"
-                # If close to band (within 5% of band), amber; else red
                 band = max(abs(hi - lo), 1e-9)
                 dist = min(abs(v - lo), abs(v - hi))
                 return "Amber" if dist <= 0.05 * band else "Red"
 
-            merged_eval["RAG"] = merged_eval.apply(rag, axis=1)
-            merged_eval["delta_vs_mid"] = merged_eval["value_num"] - merged_eval["mid_num"]
+            merged["RAG"] = merged.apply(rag, axis=1)
+            merged["delta_vs_mid"] = merged["value"] - merged["mid"]
 
-            # Tiles with RAG labels
             cols = st.columns(3)
-            for i, row in merged_eval.iterrows():
+            for i, row in merged.iterrows():
                 with cols[i % 3]:
-                    st.metric(
-                        row["metric"],
-                        fmt_value(row["value_num"], row["unit"]),
-                        delta=fmt_delta(row["delta_vs_mid"], row["unit"]),
-                    )
-                    rag_val = row["RAG"]
-                    if rag_val == "Green":
-                        st.success("On track (within guidance band)")
-                    elif rag_val == "Amber":
-                        st.warning("Watch (near guidance band)")
-                    elif rag_val == "Red":
-                        st.error("Off track (outside guidance band)")
+                    st.metric(row["metric"], fmt_value(row["value"], row["unit"]), fmt_delta(row["delta_vs_mid"], row["unit"]))
+                    if row["RAG"] == "Green":
+                        st.success("On track")
+                    elif row["RAG"] == "Amber":
+                        st.warning("Watch")
+                    elif row["RAG"] == "Red":
+                        st.error("Off track")
                     else:
-                        st.info("No band / insufficient data")
+                        st.info("No guidance band")
 
-            st.divider()
-            st.subheader("Guidance table (audit)")
             st.dataframe(
-                merged_eval[[
-                    "metric", "unit", "value_num", "low_num", "mid_num", "high_num",
-                    "delta_vs_mid", "RAG", "confidence", "source_ref_g", "confidence_g"
-                ]].rename(columns={
-                    "value_num": "actual",
-                    "low_num": "guid_low",
-                    "mid_num": "guid_mid",
-                    "high_num": "guid_high",
-                    "source_ref_g": "guidance_source",
-                    "confidence_g": "guidance_confidence"
-                }),
+                merged[["metric", "unit", "value", "low", "mid", "high", "delta_vs_mid", "RAG", "source_ref_g", "confidence_g"]]
+                .rename(columns={"value": "actual", "source_ref_g": "guidance_source", "confidence_g": "guidance_confidence"}),
                 use_container_width=True
             )
 
+    st.divider()
+
+    # --- Peers compare ---
+    st.markdown("### Peer comparison (same KPI, same unit, same FY)")
+
+    # Keep only two competitors
+    peer_universe = ["GE Vernova", "Schneider Electric"]
+
+    # Filter peer data for selected period and confidence (exclude Low)
+    p = peers[(peers["company"].isin(peer_universe)) & (peers["period"] == selected_period)].copy()
+    p = p[p["confidence"].isin(allowed_conf)]
+
+    # Siemens point for same period
+    se = kpis_view_all.copy()
+    se = se[se["confidence"].isin(allowed_conf)]
+
+    # KPI selection (intersection)
+    common_metrics = sorted(set(se["metric"].unique()).intersection(set(p["metric"].unique()))) if len(p) > 0 else sorted(se["metric"].unique())
+    peer_metric = st.selectbox("KPI", common_metrics)
+
+    # Unit must match
+    se_unit = se[se["metric"] == peer_metric]["unit"].iloc[0] if len(se[se["metric"] == peer_metric]) else None
+    if se_unit is None:
+        st.warning("Selected KPI not available for Siemens Energy in this period.")
+        st.stop()
+
+    # Build comparison table
+    rows = []
+    # Siemens
+    se_val = se[se["metric"] == peer_metric]["value"].iloc[0] if len(se[se["metric"] == peer_metric]) else None
+    rows.append({"company": "Siemens Energy", "value": se_val, "unit": se_unit})
+
+    # Peers
+    p2 = p[(p["metric"] == peer_metric) & (p["unit"] == se_unit)].copy()
+    for _, r in p2.iterrows():
+        rows.append({"company": r["company"], "value": r["value"], "unit": r["unit"]})
+
+    comp = pd.DataFrame(rows)
+    comp["value_num"] = pd.to_numeric(comp["value"], errors="coerce")
+    comp = comp.dropna(subset=["value_num"]).sort_values("value_num", ascending=False)
+
+    if len(comp) == 0:
+        st.warning("No High/Medium confidence peer values for this KPI + unit.")
+    else:
+        st.bar_chart(comp.set_index("company")["value_num"])
+        st.dataframe(comp[["company", "value_num", "unit"]].rename(columns={"value_num": "value"}), use_container_width=True)
 
 # ===========================
 # TAB: STRATEGIC INTELLIGENCE
 # ===========================
 with tab_intel:
-    st.subheader("Strategic Intelligence (Signals, not noise)")
+    st.subheader("Strategic Intelligence (Signals)")
+
     if intelligence.empty:
-        st.info("No intelligence file found. Use the daily collector to create data/intelligence_live.csv.")
+        st.info("No intelligence file found. Add intelligence_2025.csv or set up intelligence_live.csv (daily).")
     else:
-        st.caption(f"Feed source: **{intel_path}**")
+        if intel_path:
+            st.caption(f"Feed: **{intel_path}**")
 
-        # Governance expectation: categories
-        required_cols = ["category", "entity"]
-        for c in required_cols:
-            if c not in intelligence.columns:
-                st.error(f"Intelligence file missing required column: {c}")
-                st.stop()
-
-        # Lookback filter
+        # Lookback
         if "date_dt" in intelligence.columns and intelligence["date_dt"].notna().any():
             cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=lookback_days)
             intel = intelligence[intelligence["date_dt"] >= cutoff].copy()
         else:
             intel = intelligence.copy()
+
+        # Required columns for your intelligence governance
+        # Ideal columns: date_utc, category, entity, headline, region, signal_type, impact_area, expected_impact, confidence, action_required, source_url
+        # We'll degrade gracefully if some are missing.
+        for needed in ["category", "entity"]:
+            if needed not in intel.columns:
+                st.error(f"Intelligence file is missing required column: {needed}")
+                st.stop()
 
         # Filters
         c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
@@ -406,17 +495,18 @@ with tab_intel:
 
         if q.strip():
             s = q.strip().lower()
-            text_cols = [c for c in ["headline", "description", "signal_type", "impact_area", "strategic_implication"] if c in intel.columns]
+            cols = [c for c in ["headline", "description", "signal_type", "impact_area", "strategic_implication"] if c in intel.columns]
             mask = False
-            for col in text_cols:
-                mask = mask | intel[col].astype(str).str.lower().str.contains(s, na=False)
+            for c in cols:
+                mask = mask | intel[c].astype(str).str.lower().str.contains(s, na=False)
             intel = intel[mask]
 
-        # Top line charts
+        # Category volume chart
         left, right = st.columns([1, 1])
         with left:
             st.caption("Signal volume by category")
             st.bar_chart(intel["category"].value_counts())
+
         with right:
             if "expected_impact" in intel.columns:
                 st.caption("Impact mix")
@@ -424,8 +514,8 @@ with tab_intel:
 
         st.divider()
 
-        # Critical signals (Head of Strategy default)
-        st.markdown("### 🚨 Critical signals (requires attention)")
+        # Critical signals
+        st.markdown("### 🚨 Critical signals (attention)")
         if "expected_impact" in intel.columns:
             crit = intel[(intel["expected_impact"] == "Negative") | (intel.get("action_required", "").astype(str).str.strip() != "")]
         else:
@@ -436,10 +526,10 @@ with tab_intel:
             crit = crit.sort_values(sort_col, ascending=False)
 
         show_cols = [c for c in [
-            "date_utc", "category", "entity", "headline", "signal_type", "impact_area",
-            "expected_impact", "confidence", "action_required", "source_url"
+            "date_utc", "category", "entity", "headline", "region",
+            "signal_type", "impact_area", "expected_impact", "confidence", "action_required", "source_url"
         ] if c in crit.columns]
-        st.dataframe(crit[show_cols].head(40), use_container_width=True)
+        st.dataframe(crit[show_cols].head(50), use_container_width=True)
 
         st.divider()
 
@@ -452,24 +542,22 @@ with tab_intel:
             intel = intel.sort_values(sort_col, ascending=False)
         st.dataframe(intel[all_cols], use_container_width=True)
 
-
 # ===========================
 # TAB: STRATEGY
 # ===========================
 with tab_strategy:
-    st.subheader("Management Signals & Implications")
+    st.subheader("Strategy (Management signals & implications)")
 
     if strategy.empty:
-        st.info("No strategy file found. Add data/strategy_2025.csv.")
+        st.info("No strategy_2025.csv found.")
     else:
-        # Basic filters
         if "theme" in strategy.columns:
             themes = ["All"] + sorted(strategy["theme"].dropna().unique().tolist())
             theme_sel = st.selectbox("Theme", themes)
         else:
             theme_sel = "All"
 
-        search = st.text_input("Search", placeholder="Grid Technologies, HVDC, margin, backlog...")
+        search = st.text_input("Search", placeholder="Grid, HVDC, margin, backlog, restructuring...")
 
         sview = strategy.copy()
         if theme_sel != "All" and "theme" in sview.columns:
@@ -483,7 +571,6 @@ with tab_strategy:
                 mask = mask | sview[c].astype(str).str.lower().str.contains(s, na=False)
             sview = sview[mask]
 
-        # Show most recent first
         if "date" in sview.columns:
             sview["date"] = safe_dt(sview["date"])
             sview = sview.sort_values("date", ascending=False)
