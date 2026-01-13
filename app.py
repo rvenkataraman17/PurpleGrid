@@ -37,7 +37,18 @@ REQUIRED_PATH_TOKENS = {
 
 
 def safe_dt(series):
-    return pd.to_datetime(series, errors="coerce")
+    """
+    Parse dates robustly and normalize to timezone-naive UTC timestamps.
+    This avoids pandas errors when comparing tz-aware and tz-naive datetimes.
+    """
+    s = pd.to_datetime(series, errors="coerce", utc=True)
+    # Convert tz-aware UTC -> tz-naive (still UTC clock time)
+    try:
+        s = s.dt.tz_convert(None)
+    except Exception:
+        pass
+    return s
+
 
 
 def fmt_value(value, unit):
@@ -291,8 +302,11 @@ with tab_intel:
 
         intel = intelligence.copy()
         if "date_dt" in intel.columns and intel["date_dt"].notna().any():
-            cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=intel_days)
-            intel = intel[intel["date_dt"] >= cutoff]
+            cutoff = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=intel_days)).tz_convert(None)
+
+if "date_dt" in intel.columns and intel["date_dt"].notna().any():
+    intel = intel[intel["date_dt"] >= cutoff]
+
 
         c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
         cats = sorted(intel["category"].dropna().unique().tolist()) if "category" in intel.columns else []
